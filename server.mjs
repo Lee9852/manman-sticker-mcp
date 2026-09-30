@@ -1,19 +1,77 @@
 import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import * as z from "zod/v4";
-import { getSticker, searchStickers, stickerWithUrl } from "./lib/catalog.mjs";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
-const publicDir = join(currentDir, "public");
+const nestedCatalogUrl = new URL("./lib/catalog.mjs", import.meta.url);
+const catalogApi = existsSync(fileURLToPath(nestedCatalogUrl))
+  ? await import(nestedCatalogUrl.href)
+  : buildFlatCatalogApi();
+const { getSticker, searchStickers, stickerWithUrl } = catalogApi;
+const publicDir = existsSync(join(currentDir, "public", "widget.html"))
+  ? join(currentDir, "public")
+  : currentDir;
+const stickerDir = existsSync(join(publicDir, "stickers", "001.jpg"))
+  ? join(publicDir, "stickers")
+  : currentDir;
 const widgetHtml = readFileSync(join(publicDir, "widget.html"), "utf8");
 const indexHtml = readFileSync(join(publicDir, "index.html"), "utf8");
 const port = Number(process.env.PORT || 3000);
 const uiResourceUri = "ui://manman-stickers/card-v1.html";
 const uiMimeType = "text/html;profile=mcp-app";
+
+function buildFlatCatalogApi() {
+  const catalog = JSON.parse(readFileSync(join(currentDir, "stickers.json"), "utf8"));
+  const normalize = value => String(value ?? "")
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[\s，。！？、,.!?;；:：~～—_-]+/g, "");
+
+  const scoreSticker = (sticker, query) => {
+    const q = normalize(query);
+    if (!q) return 1;
+    const name = normalize(sticker.name);
+    let score = q === normalize(sticker.id) ? 1000 : 0;
+    if (q === name) score += 500;
+    if (name.includes(q)) score += 180;
+    if (q.includes(name)) score += 150;
+    for (const rawLabel of sticker.labels) {
+      const label = normalize(rawLabel);
+      if (q === label) score += 220;
+      else if (q.includes(label)) score += 90 + Math.min(label.length, 8);
+      else if (q.length >= 2 && label.includes(q)) score += 65;
+    }
+    return score;
+  };
+
+  return {
+    searchStickers(query = "", limit = 6) {
+      const safeLimit = Math.max(1, Math.min(Number(limit) || 6, 12));
+      return catalog
+        .map(sticker => ({ sticker, score: scoreSticker(sticker, query) }))
+        .filter(item => item.score > 0)
+        .sort((a, b) => b.score - a.score || a.sticker.id.localeCompare(b.sticker.id))
+        .slice(0, safeLimit)
+        .map(item => item.sticker);
+    },
+    getSticker(id) {
+      const wanted = String(id ?? "").trim().padStart(3, "0");
+      return catalog.find(sticker => sticker.id === wanted);
+    },
+    stickerWithUrl(sticker, baseUrl) {
+      return {
+        id: sticker.id,
+        name: sticker.name,
+        labels: sticker.labels,
+        imageUrl: `${baseUrl.replace(/\/$/, "")}/stickers/${encodeURIComponent(sticker.file)}`
+      };
+    }
+  };
+}
 
 const stickerOutputSchema = z.object({
   id: z.string(),
@@ -242,7 +300,7 @@ const httpServer = createServer((req, res) => {
   const stickerMatch = requestUrl.pathname.match(/^\/stickers\/(\d{3}\.jpg)$/);
   if (req.method === "GET" && stickerMatch) {
     try {
-      const image = readFileSync(join(publicDir, "stickers", stickerMatch[1]));
+      const image = readFileSync(join(stickerDir, stickerMatch[1]));
       send(res, 200, "image/jpeg", image, "public, max-age=31536000, immutable");
     } catch {
       send(res, 404, "application/json; charset=utf-8", JSON.stringify({ error: "Sticker not found" }));

@@ -137,7 +137,7 @@ function uiMeta(baseUrl) {
 
 function buildMcpServer(baseUrl) {
   const mcp = new McpServer(
-    { name: "manman-sticker-mcp", version: "1.0.5" },
+    { name: "manman-sticker-mcp", version: "1.1.0" },
     {
       capabilities: { tools: {}, resources: {} }
     }
@@ -194,12 +194,6 @@ function buildMcpServer(baseUrl) {
         destructiveHint: false,
         idempotentHint: true,
         openWorldHint: false
-      },
-      _meta: {
-        ui: { resourceUri: uiResourceUri },
-        "openai/outputTemplate": uiResourceUri,
-        "openai/toolInvocation/invoking": "正在翻表情包……",
-        "openai/toolInvocation/invoked": "找到啦"
       }
     },
     async ({ id }) => {
@@ -212,11 +206,13 @@ function buildMcpServer(baseUrl) {
       }
 
       const baseResult = stickerWithUrl(sticker, baseUrl);
-      const result = { ...baseResult, imageUrl: `${baseResult.imageUrl}?ui=v6`, uiVersion: "sticker-v6" };
+      const result = { ...baseResult, uiVersion: "native-image-v1" };
+      const image = readFileSync(join(stickerDir, sticker.file));
       return {
         content: [{
-          type: "text",
-          text: `已选中：${result.name}\n图片地址：${result.imageUrl}`
+          type: "image",
+          data: image.toString("base64"),
+          mimeType: "image/jpeg"
         }],
         structuredContent: result
       };
@@ -287,7 +283,7 @@ const httpServer = createServer((req, res) => {
   }
 
   if (req.method === "GET" && requestUrl.pathname === "/health") {
-    send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, stickers: 29, version: "1.0.5", ui: "sticker-v6" }));
+    send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, stickers: 29, version: "1.1.0", ui: "native-image-v1" }));
     return;
   }
 

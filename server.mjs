@@ -21,7 +21,7 @@ const stickerDir = existsSync(join(publicDir, "stickers", "001.jpg"))
 const widgetHtml = readFileSync(join(publicDir, "widget.html"), "utf8");
 const indexHtml = readFileSync(join(publicDir, "index.html"), "utf8");
 const port = Number(process.env.PORT || 3000);
-const uiResourceUri = "ui://manman-stickers/sticker-v5.html";
+const uiResourceUri = "ui://manman-stickers/sticker-v6.html";
 const uiMimeType = "text/html;profile=mcp-app";
 
 function buildFlatCatalogApi() {
@@ -137,14 +137,9 @@ function uiMeta(baseUrl) {
 
 function buildMcpServer(baseUrl) {
   const mcp = new McpServer(
-    { name: "manman-sticker-mcp", version: "1.0.4" },
+    { name: "manman-sticker-mcp", version: "1.0.5" },
     {
-      capabilities: { tools: {}, resources: {} },
-      cacheHints: {
-        "tools/list": { ttlMs: 300_000, cacheScope: "public" },
-        "resources/list": { ttlMs: 300_000, cacheScope: "public" },
-        "resources/read": { ttlMs: 300_000, cacheScope: "public" }
-      }
+      capabilities: { tools: {}, resources: {} }
     }
   );
 
@@ -217,7 +212,7 @@ function buildMcpServer(baseUrl) {
       }
 
       const baseResult = stickerWithUrl(sticker, baseUrl);
-      const result = { ...baseResult, imageUrl: `${baseResult.imageUrl}?ui=v5`, uiVersion: "sticker-v5" };
+      const result = { ...baseResult, imageUrl: `${baseResult.imageUrl}?ui=v6`, uiVersion: "sticker-v6" };
       return {
         content: [{
           type: "text",
@@ -292,7 +287,7 @@ const httpServer = createServer((req, res) => {
   }
 
   if (req.method === "GET" && requestUrl.pathname === "/health") {
-    send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, stickers: 29, version: "1.0.4", ui: "sticker-v5" }));
+    send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, stickers: 29, version: "1.0.5", ui: "sticker-v6" }));
     return;
   }
 

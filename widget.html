@@ -73,11 +73,12 @@
 
     function render(value, persist = true) {
       const sticker = readSticker(value);
-      if (!sticker?.imageUrl) return;
+      const src = sticker?.imageDataUri || sticker?.imageUrl;
+      if (!src) return;
 
       app.innerHTML =
         '<img id="sticker" src="' +
-        escapeAttr(sticker.imageUrl) +
+        escapeAttr(src) +
         '" alt="" />';
 
       if (persist && typeof window.openai?.setWidgetState === "function") {
@@ -85,7 +86,8 @@
           id: sticker.id || "",
           name: sticker.name || "",
           labels: Array.isArray(sticker.labels) ? sticker.labels : [],
-          imageUrl: sticker.imageUrl
+          imageUrl: sticker.imageUrl || "",
+          imageDataUri: sticker.imageDataUri || ""
         });
       }
 

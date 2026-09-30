@@ -10,34 +10,35 @@
     body {
       margin: 0;
       padding: 0;
-      width: fit-content;
       min-width: 0;
-      height: fit-content;
       min-height: 0;
       overflow: hidden;
       background: transparent;
     }
 
-    #app {
+    body {
       display: inline-block;
+    }
+
+    #app {
+      display: inline-flex;
+      align-items: flex-start;
+      justify-content: flex-start;
       margin: 0;
       padding: 0;
       line-height: 0;
       background: transparent;
-      border: 0;
-      box-shadow: none;
     }
 
     #sticker {
       display: block;
-      width: 124px;
-      max-width: 32vw;
+      width: 132px;
+      max-width: min(36vw, 168px);
       height: auto;
       margin: 0;
       padding: 0;
       border: 0;
-      border-radius: 10px;
-      box-shadow: none;
+      border-radius: 12px;
       background: transparent;
       object-fit: contain;
     }
@@ -55,67 +56,90 @@
     }
 
     function escapeAttr(value) {
-      return String(value).replace(/[&<>"']/g, char => ({
+      return String(value).replace(/[&<>"']/g, (char) => ({
         "&": "&amp;",
         "<": "&lt;",
         ">": "&gt;",
         '"': "&quot;",
-        "'": "&#39;"
+        "'": "&#39;",
       })[char]);
     }
 
     function fitHeight() {
       requestAnimationFrame(() => {
-        const height = Math.ceil(document.documentElement.getBoundingClientRect().height);
+        const height = Math.ceil(
+          document.documentElement.getBoundingClientRect().height
+        );
         window.openai?.notifyIntrinsicHeight?.(height);
       });
     }
 
-    function render(value, persist = true) {
+    function persist(sticker) {
+      if (typeof window.openai?.setWidgetState !== "function") return;
+
+      window.openai.setWidgetState({
+        id: sticker.id || "",
+        name: sticker.name || "",
+        labels: Array.isArray(sticker.labels) ? sticker.labels : [],
+        imageUrl: sticker.imageUrl,
+      });
+    }
+
+    function render(value, shouldPersist = true) {
       const sticker = readSticker(value);
       if (!sticker?.imageUrl) return;
 
       app.innerHTML =
         '<img id="sticker" src="' +
         escapeAttr(sticker.imageUrl) +
-        '" alt="" />';
+        '" alt="' +
+        escapeAttr(sticker.name || "表情包") +
+        '" />';
 
-      if (persist && typeof window.openai?.setWidgetState === "function") {
-        window.openai.setWidgetState({
-          id: sticker.id || "",
-          name: sticker.name || "",
-          labels: Array.isArray(sticker.labels) ? sticker.labels : [],
-          imageUrl: sticker.imageUrl
-        });
-      }
+      if (shouldPersist) persist(sticker);
 
-      document.getElementById("sticker")?.addEventListener("load", fitHeight, { once: true });
+      document
+        .getElementById("sticker")
+        ?.addEventListener("load", fitHeight, { once: true });
+
       fitHeight();
     }
 
-    function sync(event) {
+    function renderFromGlobals(event) {
       const globals = event?.detail?.globals;
-      render(
+
+      const toolOutput =
         globals?.toolOutput ||
-        window.openai?.toolOutput ||
+        window.openai?.toolOutput;
+
+      const savedState =
         globals?.widgetState ||
-        window.openai?.widgetState,
-        Boolean(globals?.toolOutput || window.openai?.toolOutput)
-      );
+        window.openai?.widgetState;
+
+      if (toolOutput) {
+        render(toolOutput, true);
+      } else if (savedState) {
+        render(savedState, false);
+      }
     }
 
-    window.addEventListener("openai:set_globals", sync);
-    sync();
+    window.addEventListener("openai:set_globals", renderFromGlobals);
+    renderFromGlobals();
 
-    window.addEventListener("message", event => {
-      if (event.source !== window.parent) return;
-      const message = event.data;
-      if (!message || message.jsonrpc !== "2.0") return;
+    window.addEventListener(
+      "message",
+      (event) => {
+        if (event.source !== window.parent) return;
 
-      if (message.method === "ui/notifications/tool-result") {
-        render(message.params?.structuredContent, true);
-      }
-    }, { passive: true });
+        const message = event.data;
+        if (!message || message.jsonrpc !== "2.0") return;
+
+        if (message.method === "ui/notifications/tool-result") {
+          render(message.params?.structuredContent, true);
+        }
+      },
+      { passive: true }
+    );
   </script>
 </body>
 </html>

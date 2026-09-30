@@ -11,9 +11,10 @@ const stickers = JSON.parse(readFileSync(join(currentDir, "stickers.json"), "utf
 const widgetHtml = readFileSync(join(currentDir, "widget.html"), "utf8");
 const port = Number(process.env.PORT || 3000);
 
-const uiResourceUri = "ui://manman-stickers/postimages-v1.html";
+const uiResourceUri = "ui://manman-stickers/inline-image-v3.html";
 const uiMimeType = "text/html;profile=mcp-app";
 const imageDomain = "https://i.postimg.cc";
+const publicBaseUrl = (process.env.PUBLIC_BASE_URL || "https://manman-sticker-mcp.onrender.com").replace(/\/$/, "");
 
 const stickerSchema = z.object({
   id: z.string(),
@@ -71,7 +72,7 @@ function uiMeta() {
       prefersBorder: false,
       csp: {
         connectDomains: [],
-        resourceDomains: [imageDomain]
+        resourceDomains: [imageDomain, publicBaseUrl]
       }
     },
     "openai/widgetPrefersBorder": false,
@@ -81,7 +82,7 @@ function uiMeta() {
     "openai/widgetDescription": "只显示一张小巧的表情包图片。",
     "openai/widgetCSP": {
       connect_domains: [],
-      resource_domains: [imageDomain]
+      resource_domains: [imageDomain, publicBaseUrl]
     }
   };
 }
@@ -228,6 +229,29 @@ const httpServer = createServer((req, res) => {
         res.end();
       }
     });
+    return;
+  }
+
+  if (req.method === "GET" && requestUrl.pathname.startsWith("/image/")) {
+    const id = decodeURIComponent(requestUrl.pathname.slice("/image/".length));
+    const sticker = getSticker(id);
+
+    if (!sticker) {
+      send(res, 404, "application/json; charset=utf-8", JSON.stringify({ error: "Sticker not found" }));
+      return;
+    }
+
+    fetchStickerImage(sticker)
+      .then(image => {
+        res.statusCode = 200;
+        res.setHeader("Content-Type", image.mimeType);
+        res.setHeader("Cache-Control", "public, max-age=86400, immutable");
+        res.end(Buffer.from(image.data, "base64"));
+      })
+      .catch(error => {
+        console.error("Sticker proxy failed", error);
+        send(res, 502, "application/json; charset=utf-8", JSON.stringify({ error: "Image fetch failed" }));
+      });
     return;
   }
 

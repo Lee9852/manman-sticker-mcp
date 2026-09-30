@@ -1,117 +1,122 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>满满的表情包</title>
-    <style>
-      :root { color-scheme: light dark; }
-      * { box-sizing: border-box; }
-      html, body {
-        margin: 0;
-        padding: 0;
-        background: transparent;
-      }
-      body {
-        min-height: 0;
-        overflow: hidden;
-      }
-      .card {
-        width: clamp(140px, 38vw, 188px);
-        margin: 0 auto;
-        padding: 10px;
-        border-radius: 18px;
-        border: 1px solid rgba(226, 207, 198, 0.95);
-        background: rgba(255, 252, 250, 0.96);
-        box-shadow: 0 2px 10px rgba(110, 88, 79, 0.06);
-      }
-      img {
-        display: block;
-        width: 100%;
-        height: auto;
-        object-fit: contain;
-        border-radius: 14px;
-      }
-      .empty {
-        width: 140px;
-        padding: 18px 8px;
-        font: 13px/1.4 system-ui, sans-serif;
-        text-align: center;
-        opacity: .68;
-      }
-      @media (prefers-color-scheme: dark) {
-        .card {
-          background: rgba(38, 34, 33, 0.96);
-          border-color: rgba(90, 74, 67, 0.85);
-          box-shadow: none;
-        }
-      }
-    </style>
-  </head>
-  <body>
-    <main id="app" class="card"><div class="empty">表情正在跑过来……</div></main>
-    <script>
-      const app = document.getElementById("app");
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>满满表情包</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      overflow: hidden;
+    }
+    body {
+      width: 100%;
+      min-height: 0;
+    }
+    #app {
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+      line-height: 0;
+      text-align: center;
+    }
+    img {
+      display: inline-block;
+      width: clamp(112px, 30vw, 136px);
+      height: auto;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 10px;
+      box-shadow: none;
+      object-fit: contain;
+      background: transparent;
+    }
+  </style>
+</head>
+<body>
+  <main id="app"></main>
+  <script>
+    const app = document.getElementById("app");
 
-      function unwrap(value) {
-        if (!value || typeof value !== "object") return null;
-        return value.sticker || value;
-      }
+    function unwrap(value) {
+      if (!value || typeof value !== "object") return null;
+      return value.sticker || value;
+    }
 
-      function syncHeight() {
-        requestAnimationFrame(() => {
-          window.openai?.notifyIntrinsicHeight?.(document.documentElement.scrollHeight);
+    function syncHeight() {
+      requestAnimationFrame(() => {
+        window.openai?.notifyIntrinsicHeight?.(
+          Math.ceil(document.documentElement.getBoundingClientRect().height)
+        );
+      });
+    }
+
+    function render(value, persist = false) {
+      const sticker = unwrap(value);
+      if (!sticker?.imageUrl) return;
+
+      app.innerHTML =
+        '<img id="sticker-image" src="' +
+        escapeAttr(sticker.imageUrl) +
+        '" alt="" />';
+
+      if (persist && typeof window.openai?.setWidgetState === "function") {
+        window.openai.setWidgetState({
+          imageUrl: sticker.imageUrl,
+          name: sticker.name || "",
+          sticker
         });
       }
 
-      function render(value, persist = false) {
-        const sticker = unwrap(value);
-        if (!sticker?.imageUrl) return;
+      const image = document.getElementById("sticker-image");
+      image?.addEventListener("load", syncHeight, { once: true });
+      syncHeight();
+    }
 
-        app.innerHTML = '<img id="sticker-image" src="' + escapeAttr(sticker.imageUrl) + '" alt="' + escapeAttr(sticker.name || "表情包") + '" />';
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, char => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      })[char]);
+    }
 
-        if (persist && typeof window.openai?.setWidgetState === "function") {
-          window.openai.setWidgetState({ sticker });
-        }
+    function escapeAttr(value) {
+      return escapeHtml(value);
+    }
 
-        const image = document.getElementById("sticker-image");
-        image?.addEventListener("load", syncHeight, { once: true });
-        image?.addEventListener("error", () => {
-          app.innerHTML = '<div class="empty">图片暂时没跑过来，再试一次就好。</div>';
-          syncHeight();
-        }, { once: true });
-        syncHeight();
+    function readOpenAIState(event) {
+      const globals = event?.detail?.globals;
+      const state = globals?.widgetState || window.openai?.widgetState;
+      render(
+        globals?.toolOutput ||
+        window.openai?.toolOutput ||
+        state?.sticker ||
+        state
+      );
+    }
+
+    window.addEventListener("openai:set_globals", readOpenAIState);
+    readOpenAIState();
+
+    window.addEventListener("message", event => {
+      if (event.source !== window.parent) return;
+      const message = event.data;
+      if (!message || message.jsonrpc !== "2.0") return;
+
+      if (message.method === "ui/notifications/tool-result") {
+        render(message.params?.structuredContent, true);
       }
-
-      function escapeHtml(value) {
-        return String(value).replace(/[&<>"']/g, char => ({
-          "&": "&amp;",
-          "<": "&lt;",
-          ">": "&gt;",
-          '"': "&quot;",
-          "'": "&#39;"
-        })[char]);
-      }
-
-      function escapeAttr(value) { return escapeHtml(value); }
-
-      function readOpenAIState(event) {
-        const globals = event?.detail?.globals;
-        render(globals?.toolOutput || window.openai?.toolOutput || globals?.widgetState || window.openai?.widgetState);
-      }
-
-      window.addEventListener("openai:set_globals", readOpenAIState);
-      readOpenAIState();
-
-      window.addEventListener("message", event => {
-        if (event.source !== window.parent) return;
-        const message = event.data;
-        if (!message || message.jsonrpc !== "2.0") return;
-
-        if (message.method === "ui/notifications/tool-result") {
-          render(message.params?.structuredContent, true);
-        }
-      }, { passive: true });
-    </script>
-  </body>
+    }, { passive: true });
+  </script>
+</body>
 </html>

@@ -3,84 +3,58 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>满满表情包</title>
   <style>
-    :root { color-scheme: light dark; }
     * { box-sizing: border-box; }
-    html, body {
-      margin: 0;
-      padding: 0;
-      background: transparent;
-      overflow: hidden;
-    }
+
+    html,
     body {
-      width: 100%;
-      min-height: 0;
-    }
-    #app {
       margin: 0;
       padding: 0;
+      width: fit-content;
+      min-width: 0;
+      height: fit-content;
+      min-height: 0;
+      overflow: hidden;
+      background: transparent;
+    }
+
+    #app {
+      display: inline-block;
+      margin: 0;
+      padding: 0;
+      line-height: 0;
       background: transparent;
       border: 0;
       box-shadow: none;
-      line-height: 0;
-      text-align: center;
     }
-    img {
-      display: inline-block;
-      width: clamp(112px, 30vw, 136px);
+
+    #sticker {
+      display: block;
+      width: 124px;
+      max-width: 32vw;
       height: auto;
       margin: 0;
       padding: 0;
       border: 0;
       border-radius: 10px;
       box-shadow: none;
-      object-fit: contain;
       background: transparent;
+      object-fit: contain;
     }
   </style>
 </head>
 <body>
   <main id="app"></main>
+
   <script>
     const app = document.getElementById("app");
 
-    function unwrap(value) {
+    function readSticker(value) {
       if (!value || typeof value !== "object") return null;
       return value.sticker || value;
     }
 
-    function syncHeight() {
-      requestAnimationFrame(() => {
-        window.openai?.notifyIntrinsicHeight?.(
-          Math.ceil(document.documentElement.getBoundingClientRect().height)
-        );
-      });
-    }
-
-    function render(value, persist = false) {
-      const sticker = unwrap(value);
-      if (!sticker?.imageUrl) return;
-
-      app.innerHTML =
-        '<img id="sticker-image" src="' +
-        escapeAttr(sticker.imageUrl) +
-        '" alt="" />';
-
-      if (persist && typeof window.openai?.setWidgetState === "function") {
-        window.openai.setWidgetState({
-          imageUrl: sticker.imageUrl,
-          name: sticker.name || "",
-          sticker
-        });
-      }
-
-      const image = document.getElementById("sticker-image");
-      image?.addEventListener("load", syncHeight, { once: true });
-      syncHeight();
-    }
-
-    function escapeHtml(value) {
+    function escapeAttr(value) {
       return String(value).replace(/[&<>"']/g, char => ({
         "&": "&amp;",
         "<": "&lt;",
@@ -90,23 +64,48 @@
       })[char]);
     }
 
-    function escapeAttr(value) {
-      return escapeHtml(value);
+    function fitHeight() {
+      requestAnimationFrame(() => {
+        const height = Math.ceil(document.documentElement.getBoundingClientRect().height);
+        window.openai?.notifyIntrinsicHeight?.(height);
+      });
     }
 
-    function readOpenAIState(event) {
+    function render(value, persist = true) {
+      const sticker = readSticker(value);
+      if (!sticker?.imageUrl) return;
+
+      app.innerHTML =
+        '<img id="sticker" src="' +
+        escapeAttr(sticker.imageUrl) +
+        '" alt="" />';
+
+      if (persist && typeof window.openai?.setWidgetState === "function") {
+        window.openai.setWidgetState({
+          id: sticker.id || "",
+          name: sticker.name || "",
+          labels: Array.isArray(sticker.labels) ? sticker.labels : [],
+          imageUrl: sticker.imageUrl
+        });
+      }
+
+      document.getElementById("sticker")?.addEventListener("load", fitHeight, { once: true });
+      fitHeight();
+    }
+
+    function sync(event) {
       const globals = event?.detail?.globals;
-      const state = globals?.widgetState || window.openai?.widgetState;
       render(
         globals?.toolOutput ||
         window.openai?.toolOutput ||
-        state?.sticker ||
-        state
+        globals?.widgetState ||
+        window.openai?.widgetState,
+        Boolean(globals?.toolOutput || window.openai?.toolOutput)
       );
     }
 
-    window.addEventListener("openai:set_globals", readOpenAIState);
-    readOpenAIState();
+    window.addEventListener("openai:set_globals", sync);
+    sync();
 
     window.addEventListener("message", event => {
       if (event.source !== window.parent) return;

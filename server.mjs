@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
@@ -7,155 +7,104 @@ import { toNodeHandler } from "@modelcontextprotocol/node";
 import * as z from "zod/v4";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
-const nestedCatalogUrl = new URL("./lib/catalog.mjs", import.meta.url);
-const catalogApi = existsSync(fileURLToPath(nestedCatalogUrl))
-  ? await import(nestedCatalogUrl.href)
-  : buildFlatCatalogApi();
-const { getSticker, searchStickers, stickerWithUrl } = catalogApi;
-const publicDir = existsSync(join(currentDir, "public", "widget.html"))
-  ? join(currentDir, "public")
-  : currentDir;
-const stickerDir = existsSync(join(publicDir, "stickers", "001.jpg"))
-  ? join(publicDir, "stickers")
-  : currentDir;
-const widgetHtml = readFileSync(join(publicDir, "widget.html"), "utf8");
-const indexHtml = readFileSync(join(publicDir, "index.html"), "utf8");
+const stickers = JSON.parse(readFileSync(join(currentDir, "stickers.json"), "utf8"));
+const widgetHtml = readFileSync(join(currentDir, "widget.html"), "utf8");
 const port = Number(process.env.PORT || 3000);
-const uiResourceUri = "ui://manman-stickers/sticker-v6.html";
+
+const uiResourceUri = "ui://manman-stickers/postimages-v1.html";
 const uiMimeType = "text/html;profile=mcp-app";
+const imageDomain = "https://i.postimg.cc";
 
-function buildFlatCatalogApi() {
-  const catalog = JSON.parse(readFileSync(join(currentDir, "stickers.json"), "utf8"));
-  const normalize = value => String(value ?? "")
-    .toLowerCase()
-    .normalize("NFKC")
-    .replace(/[\s，。！？、,.!?;；:：~～—_-]+/g, "");
-
-  const scoreSticker = (sticker, query) => {
-    const q = normalize(query);
-    if (!q) return 1;
-    const name = normalize(sticker.name);
-    let score = q === normalize(sticker.id) ? 1000 : 0;
-    if (q === name) score += 500;
-    if (name.includes(q)) score += 180;
-    if (q.includes(name)) score += 150;
-    for (const rawLabel of sticker.labels) {
-      const label = normalize(rawLabel);
-      if (q === label) score += 220;
-      else if (q.includes(label)) score += 90 + Math.min(label.length, 8);
-      else if (q.length >= 2 && label.includes(q)) score += 65;
-    }
-    return score;
-  };
-
-  return {
-    searchStickers(query = "", limit = 6) {
-      const safeLimit = Math.max(1, Math.min(Number(limit) || 6, 12));
-      return catalog
-        .map(sticker => ({ sticker, score: scoreSticker(sticker, query) }))
-        .filter(item => item.score > 0)
-        .sort((a, b) => b.score - a.score || a.sticker.id.localeCompare(b.sticker.id))
-        .slice(0, safeLimit)
-        .map(item => item.sticker);
-    },
-    getSticker(id) {
-      const wanted = String(id ?? "").trim().padStart(3, "0");
-      return catalog.find(sticker => sticker.id === wanted);
-    },
-    stickerWithUrl(sticker, baseUrl) {
-      return {
-        id: sticker.id,
-        name: sticker.name,
-        labels: sticker.labels,
-        imageUrl: `${baseUrl.replace(/\/$/, "")}/stickers/${encodeURIComponent(sticker.file)}`
-      };
-    }
-  };
-}
-
-const stickerOutputSchema = z.object({
+const stickerSchema = z.object({
   id: z.string(),
   name: z.string(),
   labels: z.array(z.string()),
-  imageUrl: z.string().url(),
-  uiVersion: z.string().optional()
+  imageUrl: z.string().url()
 });
 
-function cleanBaseUrl(value) {
-  const text = String(value || "").trim().replace(/\/$/, "");
-  try {
-    const parsed = new URL(text);
-    return ["http:", "https:"].includes(parsed.protocol) ? parsed.origin : null;
-  } catch {
-    return null;
-  }
+function normalize(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[\s，。！？、,.!?;；:：~～—_-]+/g, "");
 }
 
-function resolveBaseUrl(requestInfo) {
-  const configured = cleanBaseUrl(process.env.PUBLIC_BASE_URL);
-  if (configured) return configured;
+function scoreSticker(sticker, query) {
+  const q = normalize(query);
+  if (!q) return 1;
 
-  const forwardedHost = requestInfo?.headers?.get("x-forwarded-host");
-  const host = forwardedHost || requestInfo?.headers?.get("host");
-  const forwardedProto = requestInfo?.headers?.get("x-forwarded-proto")?.split(",")[0]?.trim();
-  let requestOrigin;
-  try {
-    requestOrigin = new URL(requestInfo?.url).origin;
-  } catch {
-    requestOrigin = null;
-  }
-  if (host) {
-    const requestProtocol = requestOrigin ? new URL(requestOrigin).protocol.replace(":", "") : null;
-    return `${forwardedProto || requestProtocol || "https"}://${host}`;
+  const name = normalize(sticker.name);
+  let score = q === normalize(sticker.id) ? 1000 : 0;
+
+  if (q === name) score += 500;
+  if (name.includes(q)) score += 180;
+  if (q.includes(name)) score += 150;
+
+  for (const rawLabel of sticker.labels) {
+    const label = normalize(rawLabel);
+    if (q === label) score += 220;
+    else if (q.includes(label)) score += 90 + Math.min(label.length, 8);
+    else if (q.length >= 2 && label.includes(q)) score += 65;
   }
 
-  return requestOrigin || `http://localhost:${port}`;
+  return score;
 }
 
-function uiMeta(baseUrl) {
+function searchStickers(query = "", limit = 6) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 6, 12));
+  return stickers
+    .map(sticker => ({ sticker, score: scoreSticker(sticker, query) }))
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.sticker.id.localeCompare(b.sticker.id))
+    .slice(0, safeLimit)
+    .map(item => item.sticker);
+}
+
+function getSticker(id) {
+  const wanted = String(id ?? "").trim().padStart(3, "0");
+  return stickers.find(sticker => sticker.id === wanted);
+}
+
+function uiMeta() {
   return {
     ui: {
       prefersBorder: false,
-      domain: baseUrl,
       csp: {
-        connectDomains: [baseUrl],
-        resourceDomains: [baseUrl]
+        connectDomains: [],
+        resourceDomains: [imageDomain]
       }
     },
     "openai/widgetPrefersBorder": false,
-    "openai/widgetDomain": baseUrl,
     "openai/ui": {
       availableDisplayModes: ["inline"]
     },
-    "openai/widgetDescription": "一张小巧的满满专属表情图片。",
+    "openai/widgetDescription": "只显示一张小巧的表情包图片。",
     "openai/widgetCSP": {
-      connect_domains: [baseUrl],
-      resource_domains: [baseUrl]
+      connect_domains: [],
+      resource_domains: [imageDomain]
     }
   };
 }
 
-function buildMcpServer(baseUrl) {
+function buildMcpServer() {
   const mcp = new McpServer(
-    { name: "manman-sticker-mcp", version: "1.1.0" },
-    {
-      capabilities: { tools: {}, resources: {} }
-    }
+    { name: "manman-sticker-mcp", version: "2.0.0" },
+    { capabilities: { tools: {}, resources: {} } }
   );
 
   mcp.registerTool(
     "sticker_search",
     {
       title: "搜索满满的表情包",
-      description: "按中文名称、情绪或聊天语境搜索表情。先调用本工具获取候选，再调用 sticker_pick 展示选中的图片。",
+      description: "按中文名称、情绪或聊天语境搜索表情。先搜索候选，再调用 sticker_pick 展示选中的图片。",
       inputSchema: z.object({
-        query: z.string().default("").describe("搜索语境或关键词，例如：委屈、想抱抱、催回复、早安"),
+        query: z.string().default("").describe("搜索语境或关键词，例如：委屈、亲亲、催回复、早安"),
         limit: z.number().int().min(1).max(12).default(6).describe("最多返回多少个候选")
       }),
       outputSchema: z.object({
         query: z.string(),
         count: z.number().int(),
-        stickers: z.array(stickerOutputSchema)
+        stickers: z.array(stickerSchema)
       }),
       annotations: {
         readOnlyHint: true,
@@ -165,17 +114,19 @@ function buildMcpServer(baseUrl) {
       }
     },
     async ({ query, limit }) => {
-      const stickers = searchStickers(query, limit).map(item => stickerWithUrl(item, baseUrl));
-      const summary = stickers.length
-        ? stickers.map(item => `${item.id}｜${item.name}｜${item.labels.join("、")}`).join("\n")
-        : "没有找到匹配表情，可以换一个更短的情绪词。";
-
+      const results = searchStickers(query, limit);
       return {
         content: [{
           type: "text",
-          text: `搜索“${query || "全部"}”得到 ${stickers.length} 个候选。要把图片发给用户，请继续调用 sticker_pick，并传入候选 id。\n${summary}`
+          text: results.length
+            ? results.map(item => `${item.id}｜${item.name}｜${item.labels.join("、")}`).join("\n")
+            : "没有找到匹配表情。"
         }],
-        structuredContent: { query, count: stickers.length, stickers }
+        structuredContent: {
+          query,
+          count: results.length,
+          stickers: results
+        }
       };
     }
   );
@@ -184,16 +135,22 @@ function buildMcpServer(baseUrl) {
     "sticker_pick",
     {
       title: "发送满满的表情包",
-      description: "按 id 选择并用小巧的卡片展示一张表情。通常在 sticker_search 之后调用。",
+      description: "按 id 选择一张表情，只显示对应图片。",
       inputSchema: z.object({
         id: z.string().describe("表情 id，例如 003")
       }),
-      outputSchema: stickerOutputSchema,
+      outputSchema: stickerSchema,
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
         openWorldHint: false
+      },
+      _meta: {
+        ui: { resourceUri: uiResourceUri },
+        "openai/outputTemplate": uiResourceUri,
+        "openai/toolInvocation/invoking": "正在挑表情……",
+        "openai/toolInvocation/invoked": "挑好了"
       }
     },
     async ({ id }) => {
@@ -205,37 +162,29 @@ function buildMcpServer(baseUrl) {
         };
       }
 
-      const baseResult = stickerWithUrl(sticker, baseUrl);
-      const result = { ...baseResult, uiVersion: "native-image-v1" };
-      const image = readFileSync(join(stickerDir, sticker.file));
       return {
-        content: [{
-          type: "image",
-          data: image.toString("base64"),
-          mimeType: "image/jpeg"
-        }],
-        structuredContent: result
+        content: [],
+        structuredContent: sticker
       };
     }
   );
 
-  const resourceMetadata = {
-    title: "满满的表情卡片",
-    description: "显示 sticker_pick 选中的表情图片、名称和标签。",
-    mimeType: uiMimeType,
-    _meta: uiMeta(baseUrl)
-  };
-
+  const meta = uiMeta();
   mcp.registerResource(
-    "manman-sticker-card",
+    "manman-sticker-image",
     uiResourceUri,
-    resourceMetadata,
+    {
+      title: "满满表情包",
+      description: "只显示 sticker_pick 选中的图片。",
+      mimeType: uiMimeType,
+      _meta: meta
+    },
     async uri => ({
       contents: [{
         uri: uri.href,
         mimeType: uiMimeType,
         text: widgetHtml,
-        _meta: uiMeta(baseUrl)
+        _meta: meta
       }]
     })
   );
@@ -243,29 +192,24 @@ function buildMcpServer(baseUrl) {
   return mcp;
 }
 
-const mcpHandler = createMcpHandler(
-  ({ requestInfo } = {}) => buildMcpServer(resolveBaseUrl(requestInfo)),
-  { responseMode: "json" }
-);
+const mcpHandler = createMcpHandler(() => buildMcpServer(), { responseMode: "json" });
 const nodeMcpHandler = toNodeHandler(mcpHandler);
 
-function setCommonHeaders(res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, MCP-Protocol-Version, Mcp-Session-Id, Mcp-Method, Mcp-Name");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-}
-
-function send(res, statusCode, contentType, body, cacheControl = "no-store") {
+function send(res, statusCode, contentType, body) {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", contentType);
-  res.setHeader("Cache-Control", cacheControl);
+  res.setHeader("Cache-Control", "no-store");
   res.end(body);
 }
 
 const httpServer = createServer((req, res) => {
-  setCommonHeaders(res);
-  const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Accept, Authorization, MCP-Protocol-Version, Mcp-Session-Id, Mcp-Method, Mcp-Name"
+  );
+  res.setHeader("X-Content-Type-Options", "nosniff");
 
   if (req.method === "OPTIONS") {
     res.statusCode = 204;
@@ -273,33 +217,32 @@ const httpServer = createServer((req, res) => {
     return;
   }
 
+  const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+
   if (requestUrl.pathname === "/mcp") {
     Promise.resolve(nodeMcpHandler(req, res)).catch(error => {
       console.error("MCP request failed", error);
-      if (!res.headersSent) send(res, 500, "application/json; charset=utf-8", JSON.stringify({ error: "MCP request failed" }));
-      else res.end();
+      if (!res.headersSent) {
+        send(res, 500, "application/json; charset=utf-8", JSON.stringify({ error: "MCP request failed" }));
+      } else {
+        res.end();
+      }
     });
     return;
   }
 
   if (req.method === "GET" && requestUrl.pathname === "/health") {
-    send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, stickers: 29, version: "1.1.0", ui: "native-image-v1" }));
+    send(
+      res,
+      200,
+      "application/json; charset=utf-8",
+      JSON.stringify({ ok: true, stickers: stickers.length, version: "2.0.0", ui: "postimages-v1" })
+    );
     return;
   }
 
   if (req.method === "GET" && requestUrl.pathname === "/") {
-    send(res, 200, "text/html; charset=utf-8", indexHtml);
-    return;
-  }
-
-  const stickerMatch = requestUrl.pathname.match(/^\/stickers\/(\d{3}\.jpg)$/);
-  if (req.method === "GET" && stickerMatch) {
-    try {
-      const image = readFileSync(join(stickerDir, stickerMatch[1]));
-      send(res, 200, "image/jpeg", image, "public, max-age=31536000, immutable");
-    } catch {
-      send(res, 404, "application/json; charset=utf-8", JSON.stringify({ error: "Sticker not found" }));
-    }
+    send(res, 200, "text/plain; charset=utf-8", "manman-sticker-mcp 2.0.0");
     return;
   }
 
@@ -308,7 +251,6 @@ const httpServer = createServer((req, res) => {
 
 httpServer.listen(port, "0.0.0.0", () => {
   console.log(`Sticker MCP is listening on http://0.0.0.0:${port}`);
-  console.log(`MCP endpoint: http://localhost:${port}/mcp`);
 });
 
 async function shutdown(signal) {

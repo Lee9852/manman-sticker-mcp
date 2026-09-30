@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>满满的表情包</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: ui-rounded, "SF Pro Rounded", "PingFang SC", system-ui, sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 12px; background: transparent; }
+      .card {
+        width: min(100%, 430px);
+        margin: 0 auto;
+        overflow: hidden;
+        border: 1px solid color-mix(in srgb, CanvasText 13%, transparent);
+        border-radius: 22px;
+        background: Canvas;
+        box-shadow: 0 14px 40px color-mix(in srgb, #8c6a5a 14%, transparent);
+      }
+      .frame {
+        display: grid;
+        min-height: 240px;
+        place-items: center;
+        padding: 12px;
+        background: color-mix(in srgb, #f5ebe5 72%, Canvas);
+      }
+      img {
+        display: block;
+        width: 100%;
+        max-height: 420px;
+        object-fit: contain;
+        border-radius: 15px;
+      }
+      .info { padding: 15px 17px 17px; }
+      h1 { margin: 0; font-size: 17px; line-height: 1.45; }
+      .labels { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+      .tag {
+        padding: 4px 9px;
+        border-radius: 999px;
+        background: color-mix(in srgb, #eab8a6 24%, Canvas);
+        font-size: 12px;
+      }
+      .empty { padding: 52px 20px; text-align: center; opacity: .68; }
+    </style>
+  </head>
+  <body>
+    <main id="app" class="card"><div class="empty">表情正在跑过来……</div></main>
+    <script>
+      const app = document.getElementById("app");
+
+      function unwrap(value) {
+        if (!value || typeof value !== "object") return null;
+        return value.sticker || value;
+      }
+
+      function render(value, persist = false) {
+        const sticker = unwrap(value);
+        if (!sticker?.imageUrl) return;
+
+        const tags = Array.isArray(sticker.labels)
+          ? sticker.labels.map(label => `<span class="tag">${escapeHtml(label)}</span>`).join("")
+          : "";
+        app.innerHTML = `
+          <div class="frame">
+            <img src="${escapeAttr(sticker.imageUrl)}" alt="${escapeAttr(sticker.name || "表情包")}" />
+          </div>
+          <div class="info">
+            <h1>${escapeHtml(sticker.name || "表情包")}</h1>
+            <div class="labels">${tags}</div>
+          </div>`;
+
+        if (persist && typeof window.openai?.setWidgetState === "function") {
+          window.openai.setWidgetState({ sticker });
+        }
+      }
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, char => ({
+          "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+        })[char]);
+      }
+
+      function escapeAttr(value) { return escapeHtml(value); }
+
+      function readOpenAIState() {
+        render(window.openai?.toolOutput || window.openai?.widgetState);
+      }
+
+      window.addEventListener("openai:set_globals", readOpenAIState);
+      readOpenAIState();
+
+      const initId = 1;
+      window.addEventListener("message", event => {
+        const message = event.data;
+        if (!message || message.jsonrpc !== "2.0") return;
+
+        if (message.id === initId && message.result) {
+          parent.postMessage({
+            jsonrpc: "2.0",
+            method: "ui/notifications/initialized",
+            params: {}
+          }, "*");
+        }
+
+        if (message.method === "ui/notifications/tool-result") {
+          render(message.params?.structuredContent, true);
+        }
+      });
+
+      parent.postMessage({
+        jsonrpc: "2.0",
+        id: initId,
+        method: "ui/initialize",
+        params: {
+          protocolVersion: "2026-01-26",
+          appInfo: { name: "manman-sticker-card", version: "1.0.0" },
+          appCapabilities: {}
+        }
+      }, "*");
+    </script>
+  </body>
+</html>

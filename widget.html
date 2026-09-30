@@ -10,16 +10,18 @@
     body {
       margin: 0;
       padding: 0;
-      width: fit-content;
-      min-width: 0;
-      height: fit-content;
-      min-height: 0;
+      width: 124px;
+      min-width: 124px;
+      height: 124px;
+      min-height: 124px;
       overflow: hidden;
       background: transparent;
     }
 
     #app {
-      display: inline-block;
+      display: block;
+      width: 124px;
+      height: 124px;
       margin: 0;
       padding: 0;
       line-height: 0;
@@ -31,8 +33,7 @@
     #sticker {
       display: block;
       width: 124px;
-      max-width: 32vw;
-      height: auto;
+      height: 124px;
       margin: 0;
       padding: 0;
       border: 0;
@@ -66,8 +67,7 @@
 
     function fitHeight() {
       requestAnimationFrame(() => {
-        const height = Math.ceil(document.documentElement.getBoundingClientRect().height);
-        window.openai?.notifyIntrinsicHeight?.(height);
+        window.openai?.notifyIntrinsicHeight?.(124);
       });
     }
 

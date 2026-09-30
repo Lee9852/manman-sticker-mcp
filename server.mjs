@@ -22,6 +22,12 @@ const stickerSchema = z.object({
   imageUrl: z.string().url()
 });
 
+const pickedStickerSchema = stickerSchema.extend({
+  imageDataUri: z.string().min(1)
+});
+
+const imageCache = new Map();
+
 function publicSticker(sticker) {
   return {
     id: sticker.id,
@@ -72,6 +78,43 @@ function searchStickers(query = "", limit = 6) {
 function getSticker(id) {
   const wanted = String(id ?? "").trim().padStart(3, "0");
   return stickers.find(sticker => sticker.id === wanted);
+}
+
+async function fetchStickerImage(sticker) {
+  const cached = imageCache.get(sticker.id);
+  if (cached) return cached;
+
+  const response = await fetch(sticker.imageUrl, {
+    signal: AbortSignal.timeout(10000),
+    headers: { "User-Agent": "manman-sticker-mcp/2.1" }
+  });
+
+  if (!response.ok) {
+    throw new Error(`image fetch failed: ${response.status}`);
+  }
+
+  const mimeType = (response.headers.get("content-type") || "image/jpeg")
+    .split(";")[0]
+    .trim();
+
+  if (!mimeType.startsWith("image/")) {
+    throw new Error(`unexpected image content-type: ${mimeType}`);
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length > 2_500_000) {
+    throw new Error(`image too large: ${buffer.length} bytes`);
+  }
+
+  const data = buffer.toString("base64");
+  const result = {
+    mimeType,
+    data,
+    imageDataUri: `data:${mimeType};base64,${data}`
+  };
+
+  imageCache.set(sticker.id, result);
+  return result;
 }
 
 function uiMeta() {
@@ -148,7 +191,7 @@ function buildMcpServer() {
       inputSchema: z.object({
         id: z.string().describe("表情 id，例如 003")
       }),
-      outputSchema: stickerSchema,
+      outputSchema: pickedStickerSchema,
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,

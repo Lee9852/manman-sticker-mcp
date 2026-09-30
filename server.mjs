@@ -216,7 +216,8 @@ function buildMcpServer(baseUrl) {
         };
       }
 
-      const result = { ...stickerWithUrl(sticker, baseUrl), uiVersion: "sticker-v5" };
+      const baseResult = stickerWithUrl(sticker, baseUrl);
+      const result = { ...baseResult, imageUrl: `${baseResult.imageUrl}?ui=v5`, uiVersion: "sticker-v5" };
       return {
         content: [{
           type: "text",

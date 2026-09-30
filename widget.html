@@ -5,45 +5,47 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>满满的表情包</title>
     <style>
-      :root {
-        color-scheme: light dark;
-        font-family: ui-rounded, "SF Pro Rounded", "PingFang SC", system-ui, sans-serif;
-      }
+      :root { color-scheme: light dark; }
       * { box-sizing: border-box; }
-      body { margin: 0; padding: 12px; background: transparent; }
-      .card {
-        width: min(100%, 430px);
-        margin: 0 auto;
-        overflow: hidden;
-        border: 1px solid color-mix(in srgb, CanvasText 13%, transparent);
-        border-radius: 22px;
-        background: Canvas;
-        box-shadow: 0 14px 40px color-mix(in srgb, #8c6a5a 14%, transparent);
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
       }
-      .frame {
-        display: grid;
-        min-height: 240px;
-        place-items: center;
-        padding: 12px;
-        background: color-mix(in srgb, #f5ebe5 72%, Canvas);
+      body {
+        min-height: 0;
+        overflow: hidden;
+      }
+      .card {
+        width: clamp(140px, 38vw, 188px);
+        margin: 0 auto;
+        padding: 10px;
+        border-radius: 18px;
+        border: 1px solid rgba(226, 207, 198, 0.95);
+        background: rgba(255, 252, 250, 0.96);
+        box-shadow: 0 2px 10px rgba(110, 88, 79, 0.06);
       }
       img {
         display: block;
         width: 100%;
-        max-height: 420px;
+        height: auto;
         object-fit: contain;
-        border-radius: 15px;
+        border-radius: 14px;
       }
-      .info { padding: 15px 17px 17px; }
-      h1 { margin: 0; font-size: 17px; line-height: 1.45; }
-      .labels { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
-      .tag {
-        padding: 4px 9px;
-        border-radius: 999px;
-        background: color-mix(in srgb, #eab8a6 24%, Canvas);
-        font-size: 12px;
+      .empty {
+        width: 140px;
+        padding: 18px 8px;
+        font: 13px/1.4 system-ui, sans-serif;
+        text-align: center;
+        opacity: .68;
       }
-      .empty { padding: 52px 20px; text-align: center; opacity: .68; }
+      @media (prefers-color-scheme: dark) {
+        .card {
+          background: rgba(38, 34, 33, 0.96);
+          border-color: rgba(90, 74, 67, 0.85);
+          box-shadow: none;
+        }
+      }
     </style>
   </head>
   <body>
@@ -56,70 +58,60 @@
         return value.sticker || value;
       }
 
+      function syncHeight() {
+        requestAnimationFrame(() => {
+          window.openai?.notifyIntrinsicHeight?.(document.documentElement.scrollHeight);
+        });
+      }
+
       function render(value, persist = false) {
         const sticker = unwrap(value);
         if (!sticker?.imageUrl) return;
 
-        const tags = Array.isArray(sticker.labels)
-          ? sticker.labels.map(label => `<span class="tag">${escapeHtml(label)}</span>`).join("")
-          : "";
-        app.innerHTML = `
-          <div class="frame">
-            <img src="${escapeAttr(sticker.imageUrl)}" alt="${escapeAttr(sticker.name || "表情包")}" />
-          </div>
-          <div class="info">
-            <h1>${escapeHtml(sticker.name || "表情包")}</h1>
-            <div class="labels">${tags}</div>
-          </div>`;
+        app.innerHTML = '<img id="sticker-image" src="' + escapeAttr(sticker.imageUrl) + '" alt="' + escapeAttr(sticker.name || "表情包") + '" />';
 
         if (persist && typeof window.openai?.setWidgetState === "function") {
           window.openai.setWidgetState({ sticker });
         }
+
+        const image = document.getElementById("sticker-image");
+        image?.addEventListener("load", syncHeight, { once: true });
+        image?.addEventListener("error", () => {
+          app.innerHTML = '<div class="empty">图片暂时没跑过来，再试一次就好。</div>';
+          syncHeight();
+        }, { once: true });
+        syncHeight();
       }
 
       function escapeHtml(value) {
         return String(value).replace(/[&<>"']/g, char => ({
-          "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;"
         })[char]);
       }
 
       function escapeAttr(value) { return escapeHtml(value); }
 
-      function readOpenAIState() {
-        render(window.openai?.toolOutput || window.openai?.widgetState);
+      function readOpenAIState(event) {
+        const globals = event?.detail?.globals;
+        render(globals?.toolOutput || window.openai?.toolOutput || globals?.widgetState || window.openai?.widgetState);
       }
 
       window.addEventListener("openai:set_globals", readOpenAIState);
       readOpenAIState();
 
-      const initId = 1;
       window.addEventListener("message", event => {
+        if (event.source !== window.parent) return;
         const message = event.data;
         if (!message || message.jsonrpc !== "2.0") return;
-
-        if (message.id === initId && message.result) {
-          parent.postMessage({
-            jsonrpc: "2.0",
-            method: "ui/notifications/initialized",
-            params: {}
-          }, "*");
-        }
 
         if (message.method === "ui/notifications/tool-result") {
           render(message.params?.structuredContent, true);
         }
-      });
-
-      parent.postMessage({
-        jsonrpc: "2.0",
-        id: initId,
-        method: "ui/initialize",
-        params: {
-          protocolVersion: "2026-01-26",
-          appInfo: { name: "manman-sticker-card", version: "1.0.0" },
-          appCapabilities: {}
-        }
-      }, "*");
+      }, { passive: true });
     </script>
   </body>
 </html>

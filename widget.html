@@ -10,18 +10,16 @@
     body {
       margin: 0;
       padding: 0;
-      width: 124px;
-      min-width: 124px;
-      height: 124px;
-      min-height: 124px;
+      width: fit-content;
+      min-width: 0;
+      height: fit-content;
+      min-height: 0;
       overflow: hidden;
       background: transparent;
     }
 
     #app {
-      display: block;
-      width: 124px;
-      height: 124px;
+      display: inline-block;
       margin: 0;
       padding: 0;
       line-height: 0;
@@ -33,7 +31,8 @@
     #sticker {
       display: block;
       width: 124px;
-      height: 124px;
+      max-width: 32vw;
+      height: auto;
       margin: 0;
       padding: 0;
       border: 0;
@@ -67,18 +66,18 @@
 
     function fitHeight() {
       requestAnimationFrame(() => {
-        window.openai?.notifyIntrinsicHeight?.(124);
+        const height = Math.ceil(document.documentElement.getBoundingClientRect().height);
+        window.openai?.notifyIntrinsicHeight?.(height);
       });
     }
 
     function render(value, persist = true) {
       const sticker = readSticker(value);
-      const src = sticker?.imageDataUri || sticker?.imageUrl;
-      if (!src) return;
+      if (!sticker?.imageUrl) return;
 
       app.innerHTML =
         '<img id="sticker" src="' +
-        escapeAttr(src) +
+        escapeAttr(sticker.imageUrl) +
         '" alt="" />';
 
       if (persist && typeof window.openai?.setWidgetState === "function") {
@@ -86,8 +85,7 @@
           id: sticker.id || "",
           name: sticker.name || "",
           labels: Array.isArray(sticker.labels) ? sticker.labels : [],
-          imageUrl: sticker.imageUrl || "",
-          imageDataUri: sticker.imageDataUri || ""
+          imageUrl: sticker.imageUrl
         });
       }
 

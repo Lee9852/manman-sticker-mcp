@@ -2,11 +2,6 @@ import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import {
-  registerAppResource,
-  registerAppTool,
-  RESOURCE_MIME_TYPE,
-} from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
@@ -15,15 +10,12 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 const stickers = JSON.parse(
   readFileSync(join(currentDir, "stickers.json"), "utf8")
 );
-const widgetHtml = readFileSync(
-  join(currentDir, "widget.html"),
-  "utf8"
-);
 
 const PORT = Number(process.env.PORT ?? 3000);
 const MCP_PATH = "/mcp";
-const UI_URI = "ui://manman-stickers/sticker-v4.html";
-const IMAGE_DOMAIN = "https://i.postimg.cc";
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const IMAGE_TIMEOUT_MS = 15000;
+const imageCache = new Map();
 
 const stickerSchema = z.object({
   id: z.string(),
@@ -91,49 +83,67 @@ function getSticker(id) {
   return stickers.find((sticker) => sticker.id === normalizedId);
 }
 
+function normalizeMimeType(value, imageUrl) {
+  const contentType = String(value ?? "").split(";")[0].trim().toLowerCase();
+  if (contentType.startsWith("image/")) return contentType;
+
+  const pathname = new URL(imageUrl).pathname.toLowerCase();
+  if (pathname.endsWith(".png")) return "image/png";
+  if (pathname.endsWith(".gif")) return "image/gif";
+  if (pathname.endsWith(".webp")) return "image/webp";
+  return "image/jpeg";
+}
+
+async function loadStickerImage(sticker) {
+  const cached = imageCache.get(sticker.imageUrl);
+  if (cached) return cached;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), IMAGE_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(sticker.imageUrl, {
+      signal: controller.signal,
+      headers: {
+        "user-agent": "manman-sticker-mcp-kelivo/1.0",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`image request failed with HTTP ${response.status}`);
+    }
+
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length === 0) throw new Error("image response was empty");
+    if (bytes.length > MAX_IMAGE_BYTES) {
+      throw new Error("image exceeds the 8 MiB safety limit");
+    }
+
+    const image = {
+      data: bytes.toString("base64"),
+      mimeType: normalizeMimeType(
+        response.headers.get("content-type"),
+        sticker.imageUrl
+      ),
+    };
+
+    imageCache.set(sticker.imageUrl, image);
+    return image;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function createStickerServer() {
   const server = new McpServer(
     {
-      name: "manman-sticker-mcp",
-      version: "3.0.0",
+      name: "manman-sticker-mcp-kelivo",
+      version: "1.0.0",
     },
     {
       instructions:
-        "Use sticker_search to find a fitting sticker from the user's personal sticker pack, then call sticker_pick with exactly one chosen id. A sticker can be used as a lightweight conversational reaction when it naturally fits, but do not spam stickers.",
+        "Use sticker_search to find a fitting sticker, then call sticker_pick with exactly one chosen id. sticker_pick returns standard MCP image content that Kelivo can display. Let the sticker carry the reaction and avoid repeating its URL or adding redundant prose.",
     }
-  );
-
-  registerAppResource(
-    server,
-    "manman-sticker-widget",
-    UI_URI,
-    {},
-    async () => ({
-      contents: [
-        {
-          uri: UI_URI,
-          mimeType: RESOURCE_MIME_TYPE,
-          text: widgetHtml,
-          _meta: {
-            ui: {
-              prefersBorder: false,
-              csp: {
-                connectDomains: [],
-                resourceDomains: [IMAGE_DOMAIN],
-              },
-            },
-            "openai/widgetPrefersBorder": false,
-            "openai/widgetCSP": {
-              connect_domains: [],
-              resource_domains: [IMAGE_DOMAIN],
-            },
-            "openai/ui": {
-              availableDisplayModes: ["inline"],
-            },
-          },
-        },
-      ],
-    })
   );
 
   server.registerTool(
@@ -193,13 +203,12 @@ function createStickerServer() {
     }
   );
 
-  registerAppTool(
-    server,
+  server.registerTool(
     "sticker_pick",
     {
       title: "发送满满的表情包",
       description:
-        "从 sticker_search 的候选中按 id 选择一张表情，并直接渲染这张图片。",
+        "从 sticker_search 的候选中按 id 选择一张，并返回 Kelivo 可直接显示的 MCP 图片。",
       inputSchema: {
         id: z.string().describe("表情 id，例如 003"),
       },
@@ -214,12 +223,6 @@ function createStickerServer() {
         destructiveHint: false,
         idempotentHint: true,
         openWorldHint: false,
-      },
-      _meta: {
-        ui: { resourceUri: UI_URI },
-        "openai/outputTemplate": UI_URI,
-        "openai/toolInvocation/invoking": "正在挑表情……",
-        "openai/toolInvocation/invoked": "挑好了",
       },
     },
     async ({ id }) => {
@@ -237,10 +240,30 @@ function createStickerServer() {
         };
       }
 
-      return {
-        content: [],
-        structuredContent: sticker,
-      };
+      try {
+        const image = await loadStickerImage(sticker);
+        return {
+          content: [
+            {
+              type: "image",
+              data: image.data,
+              mimeType: image.mimeType,
+            },
+          ],
+          structuredContent: sticker,
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text:
+                `表情图片加载失败：${error.message}。直链：${sticker.imageUrl}`,
+            },
+          ],
+        };
+      }
     }
   );
 
@@ -282,16 +305,17 @@ const httpServer = createServer(async (req, res) => {
     res.writeHead(200, {
       "content-type": "text/plain; charset=utf-8",
     });
-    res.end("manman-sticker-mcp 3.0.0");
+    res.end("manman-sticker-mcp-kelivo 1.0.0");
     return;
   }
 
   if (req.method === "GET" && url.pathname === "/health") {
     sendJson(res, 200, {
       ok: true,
-      version: "3.0.0",
+      version: "1.0.0",
       stickers: stickers.length,
-      ui: UI_URI,
+      client: "Kelivo",
+      endpoint: MCP_PATH,
     });
     return;
   }
@@ -340,6 +364,7 @@ const httpServer = createServer(async (req, res) => {
 
 httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(
-    `Sticker MCP listening on http://0.0.0.0:${PORT}${MCP_PATH}`
+    `Kelivo Sticker MCP listening on http://0.0.0.0:${PORT}${MCP_PATH}`
   );
 });
+

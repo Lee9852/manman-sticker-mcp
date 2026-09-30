@@ -11,9 +11,9 @@ const stickers = JSON.parse(readFileSync(join(currentDir, "stickers.json"), "utf
 const widgetHtml = readFileSync(join(currentDir, "widget.html"), "utf8");
 const port = Number(process.env.PORT || 3000);
 
-const uiResourceUri = "ui://manman-stickers/proxy-v2.html";
+const uiResourceUri = "ui://manman-stickers/postimages-v1.html";
 const uiMimeType = "text/html;profile=mcp-app";
-const publicBaseUrl = String(process.env.PUBLIC_BASE_URL || "https://manman-sticker-mcp.onrender.com").replace(/\/$/, "");
+const imageDomain = "https://i.postimg.cc";
 
 const stickerSchema = z.object({
   id: z.string(),
@@ -21,21 +21,6 @@ const stickerSchema = z.object({
   labels: z.array(z.string()),
   imageUrl: z.string().url()
 });
-
-const pickedStickerSchema = stickerSchema.extend({
-  imageDataUri: z.string().min(1)
-});
-
-const imageCache = new Map();
-
-function publicSticker(sticker) {
-  return {
-    id: sticker.id,
-    name: sticker.name,
-    labels: sticker.labels,
-    imageUrl: `${publicBaseUrl}/image/${encodeURIComponent(sticker.id)}`
-  };
-}
 
 function normalize(value) {
   return String(value ?? "")
@@ -80,50 +65,13 @@ function getSticker(id) {
   return stickers.find(sticker => sticker.id === wanted);
 }
 
-async function fetchStickerImage(sticker) {
-  const cached = imageCache.get(sticker.id);
-  if (cached) return cached;
-
-  const response = await fetch(sticker.imageUrl, {
-    signal: AbortSignal.timeout(10000),
-    headers: { "User-Agent": "manman-sticker-mcp/2.1" }
-  });
-
-  if (!response.ok) {
-    throw new Error(`image fetch failed: ${response.status}`);
-  }
-
-  const mimeType = (response.headers.get("content-type") || "image/jpeg")
-    .split(";")[0]
-    .trim();
-
-  if (!mimeType.startsWith("image/")) {
-    throw new Error(`unexpected image content-type: ${mimeType}`);
-  }
-
-  const buffer = Buffer.from(await response.arrayBuffer());
-  if (buffer.length > 2_500_000) {
-    throw new Error(`image too large: ${buffer.length} bytes`);
-  }
-
-  const data = buffer.toString("base64");
-  const result = {
-    mimeType,
-    data,
-    imageDataUri: `data:${mimeType};base64,${data}`
-  };
-
-  imageCache.set(sticker.id, result);
-  return result;
-}
-
 function uiMeta() {
   return {
     ui: {
       prefersBorder: false,
       csp: {
         connectDomains: [],
-        resourceDomains: [publicBaseUrl]
+        resourceDomains: [imageDomain]
       }
     },
     "openai/widgetPrefersBorder": false,
@@ -133,14 +81,14 @@ function uiMeta() {
     "openai/widgetDescription": "只显示一张小巧的表情包图片。",
     "openai/widgetCSP": {
       connect_domains: [],
-      resource_domains: [publicBaseUrl]
+      resource_domains: [imageDomain]
     }
   };
 }
 
 function buildMcpServer() {
   const mcp = new McpServer(
-    { name: "manman-sticker-mcp", version: "2.1.0" },
+    { name: "manman-sticker-mcp", version: "2.0.0" },
     { capabilities: { tools: {}, resources: {} } }
   );
 
@@ -166,7 +114,7 @@ function buildMcpServer() {
       }
     },
     async ({ query, limit }) => {
-      const results = searchStickers(query, limit).map(publicSticker);
+      const results = searchStickers(query, limit);
       return {
         content: [{
           type: "text",
@@ -191,7 +139,7 @@ function buildMcpServer() {
       inputSchema: z.object({
         id: z.string().describe("表情 id，例如 003")
       }),
-      outputSchema: pickedStickerSchema,
+      outputSchema: stickerSchema,
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -216,7 +164,7 @@ function buildMcpServer() {
 
       return {
         content: [],
-        structuredContent: publicSticker(sticker)
+        structuredContent: sticker
       };
     }
   );
@@ -283,47 +231,18 @@ const httpServer = createServer((req, res) => {
     return;
   }
 
-  const imageMatch = requestUrl.pathname.match(/^\/image\/(\d{3})$/);
-  if (req.method === "GET" && imageMatch) {
-    const sticker = getSticker(imageMatch[1]);
-    if (!sticker) {
-      send(res, 404, "application/json; charset=utf-8", JSON.stringify({ error: "Sticker not found" }));
-      return;
-    }
-
-    fetch(sticker.imageUrl)
-      .then(async upstream => {
-        if (!upstream.ok) throw new Error(`Postimages returned ${upstream.status}`);
-        const contentType = upstream.headers.get("content-type") || "image/jpeg";
-        const bytes = Buffer.from(await upstream.arrayBuffer());
-        res.statusCode = 200;
-        res.setHeader("Content-Type", contentType);
-        res.setHeader("Cache-Control", "public, max-age=86400");
-        res.end(bytes);
-      })
-      .catch(error => {
-        console.error("Sticker proxy failed", sticker.id, error);
-        if (!res.headersSent) {
-          send(res, 502, "application/json; charset=utf-8", JSON.stringify({ error: "Sticker proxy failed" }));
-        } else {
-          res.end();
-        }
-      });
-    return;
-  }
-
   if (req.method === "GET" && requestUrl.pathname === "/health") {
     send(
       res,
       200,
       "application/json; charset=utf-8",
-      JSON.stringify({ ok: true, stickers: stickers.length, version: "2.1.0", ui: "proxy-v2" })
+      JSON.stringify({ ok: true, stickers: stickers.length, version: "2.0.0", ui: "postimages-v1" })
     );
     return;
   }
 
   if (req.method === "GET" && requestUrl.pathname === "/") {
-    send(res, 200, "text/plain; charset=utf-8", "manman-sticker-mcp 2.1.0");
+    send(res, 200, "text/plain; charset=utf-8", "manman-sticker-mcp 2.0.0");
     return;
   }
 

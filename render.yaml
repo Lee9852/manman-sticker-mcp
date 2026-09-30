@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: manman-sticker-mcp
+    name: manman-sticker-mcp-kelivo
     runtime: node
     plan: free
     buildCommand: npm install --omit=dev
@@ -10,3 +10,4 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+
